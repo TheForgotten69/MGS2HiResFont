@@ -1,0 +1,9 @@
+# build output
+*.asi
+*.exe
+*.bin
+*.log
+*.rgba
+__pycache__/
+# game data: never commit
+*.raw
