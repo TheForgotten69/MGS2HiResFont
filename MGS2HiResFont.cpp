@@ -1,20 +1,3 @@
-// MGS2HiResFont.asi - high-resolution dialogue font for METAL GEAR SOLID 2 (Master Collection).
-//
-// The game rasterises subtitles, codec and menu text on the CPU from a 40 px bitmap font into
-// "text surfaces" (textures sized in font pixels), which it then stretches over the screen.
-// This plugin leaves the game's font and all of its layout alone and supersamples inside the
-// font module instead:
-//   - the text-surface allocators create surfaces SCALE times larger;
-//   - the lock function and the two texture-size getters used by the menu code report the
-//     original (logical) size back to the game;
-//   - the glyph, half-size glyph and row-clear routines write at SCALE times the position,
-//     taking the glyph bitmaps from MGS2HiResFont.bin (see make_hires_font.py).
-// Surfaces that were not created through the hooked allocators go through the game's own code,
-// and so does any glyph the .bin does not contain (enlarged from the game's bitmap).
-//
-// Every hook checks the bytes it replaces first: on another game version nothing is patched.
-// Remove the .asi (or the .bin) to disable. Log: MGS2HiResFont.log next to the .asi.
-
 #include <windows.h>
 
 #include <cstdarg>
@@ -25,15 +8,13 @@
 
 namespace {
 
-// ---- game layout (addresses are relative to the image base) ------------------------------
-
 struct Texture {
     uint8_t unknown[0x58];
     int32_t width;
     int32_t height;
 };
 
-struct SurfaceSet {  // three textures used in rotation
+struct SurfaceSet {
     int32_t previous;
     int32_t current;
     int32_t frame;
@@ -42,21 +23,21 @@ struct SurfaceSet {  // three textures used in rotation
 };
 
 #pragma pack(push, 1)
-struct TextContext {  // "kcb"
+struct TextContext {
     uint8_t unknown0[2];
-    uint8_t margin_x;      // +0x02
-    uint8_t margin_y;      // +0x03
-    uint32_t colour;       // +0x04
-    uint8_t flags;         // +0x08
+    uint8_t margin_x;
+    uint8_t margin_y;
+    uint32_t colour;
+    uint8_t flags;
     uint8_t unknown1[3];
-    int16_t wrap_width;    // +0x0c
-    int16_t pitch;         // +0x0e, bytes
-    int16_t height;        // +0x10
+    int16_t wrap_width;
+    int16_t pitch;
+    int16_t height;
     uint8_t unknown2[6];
-    uint8_t* pixels;       // +0x18, null while unlocked
-    Texture* texture;      // +0x20, single-texture mode
+    uint8_t* pixels;
+    Texture* texture;
     uint8_t unknown3[8];
-    SurfaceSet* set;       // +0x30
+    SurfaceSet* set;
 };
 
 struct GameGlyph {
@@ -68,11 +49,11 @@ struct GameGlyph {
 
 struct GameFont {
     uint32_t magic;
-    int32_t cell_width;   // +0x04
-    int32_t cell_height;  // +0x08
+    int32_t cell_width;
+    int32_t cell_height;
     int32_t gap;
-    uint32_t table;       // +0x10
-    int32_t count;        // +0x14
+    uint32_t table;
+    int32_t count;
 };
 #pragma pack(pop)
 
@@ -87,34 +68,32 @@ const int kNoWrapMargin = 0x2;
 struct Hook {
     const char* name;
     uintptr_t rva;
-    int length;            // bytes checked and copied: whole instructions; 14 are overwritten
+    int length;
     uint8_t expected[16];
     void* replacement;
-    void** original;       // receives a trampoline to the game's function; null when it is replaced whole
+    void** original;
 };
 
 const uintptr_t kFontPointer = 0x13d4ef8;
 const uintptr_t kCursorWidth = 0x9401d0;
 const uintptr_t kUnlock = 0x2b6c0;
 const uintptr_t kLock = 0x2ab20;
-// Return addresses of the calls to the single-texture allocator that create text surfaces sized from the font.
-const uintptr_t kSingleTextSites[] = {0xf099, 0x1cd56d, 0x1df315, 0x1e33f4, 0x1e5c88};
 
-// ---- state ------------------------------------------------------------------------------
+const uintptr_t kSingleTextSites[] = {0xf099, 0x1cd56d, 0x1df315, 0x1e33f4, 0x1e5c88};
 
 uint8_t* g_base;
 FILE* g_log;
 
 int g_scale;
 int g_count;
-const uint8_t* g_entries;  // count * (u32 codepoint, u16 width, u16 height, u32 offset), sorted by codepoint
+const uint8_t* g_entries;
 const uint8_t* g_bitmaps;
 
 struct Registered {
     Texture* texture;
     int32_t width, height;
 };
-Registered g_registered[8192];  // never evicted: an entry is only replaced when its address is reused
+Registered g_registered[8192];
 int g_registered_count;
 SRWLOCK g_registry_lock = SRWLOCK_INIT;
 
@@ -136,8 +115,6 @@ void log_line(const char* format, ...) {
     fflush(g_log);
 }
 
-// ---- high-resolution font ---------------------------------------------------------------
-
 bool load_font(const wchar_t* path) {
     HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
     if (file == INVALID_HANDLE_VALUE) return false;
@@ -154,7 +131,6 @@ bool load_font(const wchar_t* path) {
     return true;
 }
 
-// Bitmap of `codepoint`, (width*scale) x (height*scale), or null when the file has none of that size.
 const uint8_t* hires_bitmap(uint32_t codepoint, int width, int height) {
     int low = 0, high = g_count - 1;
     while (low <= high) {
@@ -175,8 +151,6 @@ const uint8_t* hires_bitmap(uint32_t codepoint, int width, int height) {
     return nullptr;
 }
 
-// ---- which surfaces are high-resolution -------------------------------------------------
-
 const int kTexturesPerSet = 3;
 
 bool registry_has_room() {
@@ -194,7 +168,6 @@ void remember(Texture* texture) {
     ReleaseSRWLockExclusive(&g_registry_lock);
 }
 
-// One log line per distinct code address: shows which screens use which path.
 bool first_time(uintptr_t (&seen)[64], void* address) {
     uintptr_t rva = reinterpret_cast<uint8_t*>(address) - g_base;
     for (uintptr_t& entry : seen) {
@@ -207,7 +180,6 @@ bool first_time(uintptr_t (&seen)[64], void* address) {
     return false;
 }
 
-// The size check drops an address that was freed and reused by an ordinary texture.
 bool is_hires(const Texture* texture) {
     if (!texture) return false;
     bool found = false;
@@ -236,11 +208,9 @@ const GameGlyph* game_glyph(const GameFont* font, int codepoint) {
     return nullptr;
 }
 
-// ---- drawing, in the game's (logical) pixels, clipped to the real surface ---------------
-
 struct Canvas {
     uint32_t* pixels;
-    int stride;  // pixels
+    int stride;
     int width, height;
 };
 
@@ -262,7 +232,6 @@ uint32_t shaded(uint32_t colour, uint32_t coverage) {
     return ((coverage * (colour / 255)) & 0xff000000) | (colour & 0x00ffffff);
 }
 
-// `bitmap` is source_width x source_height at `step` source pixels per output pixel (1, or 2 for half size).
 void blit(const Canvas& canvas, int x, int y, int width, int height, const uint8_t* bitmap, int source_width,
           int source_height, int step, uint32_t colour) {
     for (int row = 0; row < height; ++row) {
@@ -284,7 +253,6 @@ void blit(const Canvas& canvas, int x, int y, int width, int height, const uint8
     }
 }
 
-// The game's bitmap enlarged, for glyphs the high-resolution file does not have.
 void blit_enlarged(const Canvas& canvas, int x, int y, const GameGlyph* glyph, int factor, uint32_t colour) {
     for (int row = 0; row < glyph->height * factor; ++row)
         for (int column = 0; column < glyph->width * factor; ++column) {
@@ -297,11 +265,8 @@ void blit_enlarged(const Canvas& canvas, int x, int y, const GameGlyph* glyph, i
 
 int two_thirds_sixteenth(int cell) { return static_cast<int>((static_cast<uint64_t>(2 * cell) * 0xaaaaaaabull) >> 32) >> 4; }
 
-// ---- hooks ------------------------------------------------------------------------------
-
 uintptr_t g_seen_allocations[64], g_seen_fallbacks[64];
 
-// True when the surface asked for at `caller` is to be created SCALE times larger.
 bool enlarge(void* caller, int width, int height, bool text_site) {
     bool enlarged = text_site && registry_has_room();
     if (first_time(g_seen_allocations, caller))
@@ -326,7 +291,6 @@ SurfaceSet* hook_alloc_heap(int width, int height, int clear) {
     return set;
 }
 
-// This allocator also serves surfaces that are not text: only the call sites known to be text are enlarged.
 Texture* hook_alloc_single(int width, int height, int clear) {
     uintptr_t caller = reinterpret_cast<uint8_t*>(__builtin_return_address(0)) - g_base;
     bool text_site = false;
@@ -381,7 +345,7 @@ int hook_glyph(TextContext* context, int x, int y, int codepoint, int emphasis) 
     int left = x + glyph->x_offset;
     int top = y + glyph->y_offset > 0 ? y + glyph->y_offset : 0;
     int width = glyph->width, height = glyph->height;
-    if (codepoint != ' ') {  // the game clears a one-pixel frame around every glyph
+    if (codepoint != ' ') {
         uint32_t clear = context->colour & 0x00ffffff;
         if (left > 0) fill(canvas, left - 1, top, 1, height + 1, clear);
         fill(canvas, left + width, top, 1, height + 1, clear);
@@ -400,7 +364,6 @@ int hook_glyph(TextContext* context, int x, int y, int codepoint, int emphasis) 
     return glyph->advance;
 }
 
-// Half-size glyphs (reading aids above Japanese text).
 int hook_half(TextContext* context, int x, int y, int codepoint) {
     const Texture* texture = target_of(context);
     const GameFont* font = game_font();
@@ -419,14 +382,14 @@ int hook_half(TextContext* context, int x, int y, int codepoint) {
              height * g_scale, 2, context->colour);
     } else if (width && height) {
         blit(canvas, left * g_scale, top * g_scale, columns * g_scale, rows * g_scale, glyph->coverage, width, height, 2,
-             context->colour);  // drawn at the game's size inside the larger box: rare, and never out of bounds
+             context->colour);
     }
     return (advance + 1) / 2;
 }
 
 void hook_clear(TextContext* context, int first_row, int end_row) {
     bool locked = context->pixels != nullptr;
-    auto lock = reinterpret_cast<void (*)(TextContext*, int)>(g_base + kLock);  // through hook_lock
+    auto lock = reinterpret_cast<void (*)(TextContext*, int)>(g_base + kLock);
     auto unlock = reinterpret_cast<void (*)(TextContext*)>(g_base + kUnlock);
     if (!locked) lock(context, 0);
     int factor = is_hires(target_of(context)) ? g_scale : 1;
@@ -435,9 +398,6 @@ void hook_clear(TextContext* context, int first_row, int end_row) {
     if (!locked) unlock(context);
 }
 
-// The menu screens (save/load list, codec memory) cut their quads out of the surface with
-// texture coordinates computed as pixels / texture size, through these two getters, which only
-// text code calls. They must see the logical size, or the quads show a third of the surface.
 int hook_texture_height(const Texture* texture) {
     if (!texture) return 0;
     return is_hires(texture) ? texture->height / g_scale : texture->height;
@@ -475,9 +435,7 @@ Hook g_hooks[] = {
      reinterpret_cast<void*>(hook_clear), reinterpret_cast<void**>(&g_clear)},
 };
 
-// ---- patching ---------------------------------------------------------------------------
-
-void write_jump(uint8_t* at, const void* target) {  // jmp [rip+0]; dq target
+void write_jump(uint8_t* at, const void* target) {
     const uint8_t jump[6] = {0xff, 0x25, 0, 0, 0, 0};
     memcpy(at, jump, 6);
     memcpy(at + 6, &target, 8);
@@ -492,7 +450,7 @@ bool code_is_ready() {
 bool install() {
     uint8_t* trampolines = static_cast<uint8_t*>(VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!trampolines) return false;
-    for (Hook& hook : g_hooks) {  // all trampolines first, so no hook runs without its original
+    for (Hook& hook : g_hooks) {
         if (!hook.original) continue;
         memcpy(trampolines, g_base + hook.rva, hook.length);
         write_jump(trampolines + hook.length, g_base + hook.rva + hook.length);
@@ -511,7 +469,6 @@ bool install() {
     return true;
 }
 
-// The executable's code is still encrypted (Steam) when plugins load: wait for it, then patch.
 DWORD WINAPI wait_and_install(void*) {
     for (int waited = 0; waited < 120000; ++waited) {
         if (code_is_ready()) {
@@ -543,7 +500,7 @@ void start(HMODULE module) {
 }
 
 #ifdef MGS2HIRES_TEST
-// Offline check of the drawing path: test.exe <game font blob> <hires font> <text> <out.rgba>
+
 void fake_lock(TextContext* context, int) {
     const Texture* texture = target_of(context);
     context->wrap_width = static_cast<int16_t>(texture->width - context->margin_x - game_font()->cell_width);
@@ -578,9 +535,9 @@ int test_main(int argc, wchar_t** argv) {
     for (const wchar_t* c = argv[3]; *c; ++c) x += hook_glyph(&context, x, 0, *c, *c == L'S');
     x = 4;
     for (const wchar_t* c = argv[3]; *c; ++c) x += hook_half(&context, x, 48, *c);
-    hook_glyph(&context, 4, 80, 0, 0);       // cursor
-    hook_glyph(&context, 60, 80, 0x1234, 0); // missing glyph
-    hook_glyph(&context, 830, 100, 'W', 0);  // crosses the right and bottom edges: must clip
+    hook_glyph(&context, 4, 80, 0, 0);
+    hook_glyph(&context, 60, 80, 0x1234, 0);
+    hook_glyph(&context, 830, 100, 'W', 0);
     printf("pen %d\n", x);
     FILE* out = _wfopen(argv[4], L"wb");
     fwrite(pixels, 4, static_cast<size_t>(texture.width) * texture.height, out);
@@ -589,7 +546,7 @@ int test_main(int argc, wchar_t** argv) {
 }
 #endif
 
-}  // namespace
+}
 
 #ifdef MGS2HIRES_TEST
 int wmain(int argc, wchar_t** argv) { return test_main(argc, argv); }

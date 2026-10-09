@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""The dialogue font of MGS2 Master Collection.
-
-The font is a gzip stream named MGS_Font_nht.raw inside the executable's data (not in
-the encrypted code). Unpacked: magic "TNOF", cell size, a (codepoint, offset) table, then
-per glyph a 5-byte header (width, height, x offset, y offset, advance) and 8-bit coverage.
-
-  python3 mgsfont.py "METAL GEAR SOLID2.exe" font_original.raw
-"""
 import struct
 import sys
 import zlib
@@ -14,7 +6,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 BLOB_NAME = b"MGS_Font_nht.raw"
-GZIP_HEADER = 10  # bytes of gzip header before the stored file name
+GZIP_HEADER = 10
 
 
 class Glyph(NamedTuple):
@@ -27,7 +19,6 @@ class Glyph(NamedTuple):
 
 
 def extract(executable: bytes) -> bytes:
-    """The unpacked font blob from the game's executable."""
     at = executable.find(BLOB_NAME)
     if at < GZIP_HEADER:
         raise ValueError("font not found: is this METAL GEAR SOLID2.exe?")
@@ -48,7 +39,7 @@ def read(raw: bytes) -> dict[int, Glyph]:
 
 def main() -> int:
     if len(sys.argv) != 3:
-        print(__doc__)
+        print('usage: mgsfont.py "METAL GEAR SOLID2.exe" font_original.raw')
         return 2
     raw = extract(Path(sys.argv[1]).read_bytes())
     Path(sys.argv[2]).write_bytes(raw)

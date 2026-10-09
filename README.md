@@ -9,7 +9,16 @@ from a 40-pixel bitmap font and stretches it to your resolution. At 4K that is a
 the text is soft. This plugin makes the game draw that text at 3x. Position, size, spacing and
 line breaks are unchanged.
 
-![Before and after, in-game, zoomed 3x](docs/compare_ingame_zoom.png)
+## Before and after
+
+Rendered from the font data: "before" is the game's 40-pixel glyphs stretched 3x, as the game
+does at 4K; "after" is what the plugin draws, with the game's spacing.
+
+![Dialogue lines, before and after](docs/compare_dialogue.png)
+
+![Save menu, before and after](docs/compare_menu.png)
+
+![Zoomed, before and after](docs/compare_zoom.png)
 
 Status: **beta**. Tested at 4K on Linux (Proton), in English, on subtitles, codec dialogue and
 the save/load list.
@@ -42,7 +51,14 @@ supersamples inside the font module:
 - the glyph, half-size glyph and row-clear routines draw at 3x, from `MGS2HiResFont.bin`.
 
 Surfaces created any other way, and glyphs missing from the `.bin`, go through the game's code.
-The comments in `MGS2HiResFont.cpp` give the addresses and structures.
+
+Font blob (`MGS_Font_nht.raw`, gzip, in the executable's data): magic `TNOF`, cell size, a
+(codepoint, offset) table, then per glyph a 5-byte header (width, height, x offset, y offset,
+advance) and 8-bit coverage.
+
+`MGS2HiResFont.bin`: `MG2F`, u32 scale, u32 count, count x (u32 codepoint, u16 width,
+u16 height, u32 offset) sorted by codepoint, then 8-bit coverage, (width x scale) by
+(height x scale) per glyph. Width and height are the game's.
 
 ## Build
 
